@@ -39,7 +39,7 @@ type claudeResult struct {
 
 // streamClaude shells out to the local `claude` CLI, streams text deltas to
 // onDelta, and returns final usage info from the result event.
-func streamClaude(ctx context.Context, messages []ollamaMessage, onDelta func(string) error) (claudeResult, error) {
+func streamClaude(ctx context.Context, claudeModel string, messages []ollamaMessage, onDelta func(string) error) (claudeResult, error) {
 	prompt, system := buildPrompt(messages)
 	if prompt == "" {
 		return claudeResult{}, fmt.Errorf("no user message in request")
@@ -56,8 +56,12 @@ func streamClaude(ctx context.Context, messages []ollamaMessage, onDelta func(st
 	if system != "" {
 		args = append(args, "--append-system-prompt", system)
 	}
-	if model := os.Getenv("CLAUDE_MODEL"); model != "" {
-		args = append(args, "--model", model)
+	// Per-request model wins; CLAUDE_MODEL env is a final fallback.
+	if claudeModel == "" {
+		claudeModel = os.Getenv("CLAUDE_MODEL")
+	}
+	if claudeModel != "" {
+		args = append(args, "--model", claudeModel)
 	}
 
 	cmd := exec.CommandContext(ctx, "claude", args...)

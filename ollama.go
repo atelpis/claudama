@@ -2,15 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 )
 
-const (
-	fakeModelName   = "claudama:latest"
-	fakeModelDigest = "0000000000000000000000000000000000000000000000000000000000000000"
-)
+const fakeModelDigest = "0000000000000000000000000000000000000000000000000000000000000000"
 
 type tagsResponse struct {
 	Models []tagModel `json:"models"`
@@ -49,47 +47,52 @@ type showResponse struct {
 	Capabilities []string       `json:"capabilities"`
 }
 
+func modelDetails(m modelEntry) tagModelInfo {
+	return tagModelInfo{
+		Format:            "gguf",
+		Family:            "llama",
+		Families:          []string{"llama"},
+		ParameterSize:     m.Param,
+		QuantizationLevel: "Q4_K_M",
+	}
+}
+
+func handleTags(w http.ResponseWriter, r *http.Request) {
+	resp := tagsResponse{Models: make([]tagModel, 0, len(models))}
+	now := time.Now().UTC()
+	for _, m := range models {
+		resp.Models = append(resp.Models, tagModel{
+			Name:       m.Tag,
+			Model:      m.Tag,
+			ModifiedAt: now,
+			Size:       4000000000,
+			Digest:     fakeModelDigest,
+			Details:    modelDetails(m),
+		})
+	}
+	writeJSON(w, resp)
+}
+
 func handleShow(w http.ResponseWriter, r *http.Request) {
-	// Body is ignored — we only ever serve one model.
 	var req showRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
+	tag := req.Model
+	if tag == "" {
+		tag = req.Name
+	}
+	m := resolveModel(tag)
 
 	writeJSON(w, showResponse{
-		Modelfile:  "# claudama — forwards to local `claude` CLI\n",
+		Modelfile:  "# claudama — forwards to local `claude` CLI (" + m.ClaudeArg + ")\n",
 		Parameters: "",
 		Template:   "{{ .Prompt }}",
-		Details: tagModelInfo{
-			Format:            "gguf",
-			Family:            "llama",
-			Families:          []string{"llama"},
-			ParameterSize:     "8B",
-			QuantizationLevel: "Q4_K_M",
-		},
+		Details:    modelDetails(m),
 		ModelInfo: map[string]any{
 			"general.architecture":    "llama",
 			"general.parameter_count": 8000000000,
 			"llama.context_length":    200000,
 		},
 		Capabilities: []string{"completion"},
-	})
-}
-
-func handleTags(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, tagsResponse{
-		Models: []tagModel{{
-			Name:       fakeModelName,
-			Model:      fakeModelName,
-			ModifiedAt: time.Now().UTC(),
-			Size:       4000000000,
-			Digest:     fakeModelDigest,
-			Details: tagModelInfo{
-				Format:            "gguf",
-				Family:            "llama",
-				Families:          []string{"llama"},
-				ParameterSize:     "8B",
-				QuantizationLevel: "Q4_K_M",
-			},
-		}},
 	})
 }
 
@@ -126,16 +129,32 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	m := resolveModel(req.Model)
 	model := req.Model
 	if model == "" {
-		model = fakeModelName
+		model = m.Tag
 	}
 	stream := req.Stream == nil || *req.Stream
 	start := time.Now()
 
+	var sysMsgs, userMsgs, asstMsgs, totalChars int
+	for _, msg := range req.Messages {
+		totalChars += len(msg.Content)
+		switch msg.Role {
+		case "system":
+			sysMsgs++
+		case "user":
+			userMsgs++
+		case "assistant":
+			asstMsgs++
+		}
+	}
+	log.Printf("chat: requested=%q claude=%q stream=%t messages=%d (sys=%d user=%d asst=%d) chars=%d",
+		req.Model, m.ClaudeArg, stream, len(req.Messages), sysMsgs, userMsgs, asstMsgs, totalChars)
+
 	if !stream {
 		var sb strings.Builder
-		res, err := streamClaude(r.Context(), req.Messages, func(delta string) error {
+		res, err := streamClaude(r.Context(), m.ClaudeArg, req.Messages, func(delta string) error {
 			sb.WriteString(delta)
 			return nil
 		})
@@ -164,7 +183,7 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	enc := json.NewEncoder(w)
 
-	res, err := streamClaude(r.Context(), req.Messages, func(delta string) error {
+	res, err := streamClaude(r.Context(), m.ClaudeArg, req.Messages, func(delta string) error {
 		if err := enc.Encode(chatResponse{
 			Model:     model,
 			CreatedAt: time.Now().UTC(),
