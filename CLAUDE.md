@@ -10,8 +10,9 @@ claudama is an Ollama-API-compatible HTTP server that forwards chat requests to 
 
 - Build: `go build ./...`
 - Vet: `go vet ./...`
-- Run: `go run .` (listens on `127.0.0.1:11434` — Ollama's default port). To change the port, edit (or create, if missing) `~/.config/claudama/conf.toml` and set `port = 11436`. The Homebrew formula seeds this file on install, so on a brew-installed system it always exists. There is no `ADDR` env var — config is file-only so Homebrew installs have one canonical place to edit. The file overrides only the fields it specifies; the in-code `defaultFileConfig()` supplies the rest.
-- Select default Claude model: `CLAUDE_MODEL=claude-opus-4-7 go run .`
+- Run: `go run ./cmd/claudama` (listens on `127.0.0.1:11434` — Ollama's default port). To change the port, edit (or create, if missing) `~/.config/claudama/conf.toml` and set `port = 11436`. The Homebrew formula seeds this file on install, so on a brew-installed system it always exists. There is no `ADDR` env var — config is file-only so Homebrew installs have one canonical place to edit. The file overrides only the fields it specifies; the in-code `defaultFileConfig()` supplies the rest.
+- Install locally: `go install ./cmd/claudama` (produces `$(go env GOBIN)/claudama` — same binary Homebrew will ship).
+- Select default Claude model: `CLAUDE_MODEL=claude-opus-4-7 go run ./cmd/claudama`
 - Test: `go test ./...`
 - Smoke test the chat endpoint:
   ```
@@ -22,7 +23,9 @@ claudama is an Ollama-API-compatible HTTP server that forwards chat requests to 
 
 ## Architecture
 
-Three files, one `main` package:
+Standard Go layout: the binary lives at `cmd/claudama/` (so `go install ./cmd/claudama` ships a single `claudama` executable — matters for Homebrew). All source files are in `package main` inside that directory; `go.mod` stays at the repo root. There is no library package — claudama is not meant to be imported.
+
+Files under `cmd/claudama/`:
 
 - `main.go` — HTTP bootstrap and config. Registers `GET /api/tags` (model list), `POST /api/show` (per-model details + capabilities — Raycast calls this after `/api/tags` and marks the model unavailable if it 404s), and `POST /api/chat`. Port comes from `~/.config/claudama/conf.toml` (`port = N`), defaulting to `11434` when the file is absent. `defaultFileConfig()` is the single source of truth for defaults — `loadFileConfig` starts from that struct and lets `toml.Unmarshal` patch in whatever the user specified, so partial files are fine. Host is always `127.0.0.1`. When the port is busy, `reportBindError` probes `/api/version` to detect whether Ollama itself is the occupant and prints a tailored message pointing at the config file.
 - `ollama.go` — Ollama wire format. `handleChat` decodes the Ollama `chatRequest`, calls `streamClaude`, and emits responses. Two modes:

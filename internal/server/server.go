@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -13,100 +13,51 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
-
-	"github.com/BurntSushi/toml"
 )
 
-type config struct {
-	Addr        string
-	Debug       bool
-	ClaudePath  string
-	ClaudeModel string // optional default fallback when no per-request model is set
+// Server wraps the resolved Config plus runtime-derived state (the discovered
+// claude binary path). It owns the HTTP server lifecycle.
+type Server struct {
+	cfg        Config
+	claudePath string
 }
 
-// fileConfig is the on-disk schema at ~/.config/claudama/conf.toml.
-// Values in defaultFileConfig() are used as a baseline; the file overrides
-// only the fields it specifies. Missing file → all defaults.
-type fileConfig struct {
-	Port int `toml:"port"`
-}
-
-func defaultFileConfig() fileConfig {
-	return fileConfig{Port: 11434}
-}
-
-func loadConfig() (config, error) {
-	fc, err := loadFileConfig()
-	if err != nil {
-		return config{}, err
-	}
-	cfg := config{
-		Addr:        fmt.Sprintf("127.0.0.1:%d", fc.Port),
-		Debug:       os.Getenv("CLAUDAMA_DEBUG") != "",
-		ClaudeModel: os.Getenv("CLAUDE_MODEL"),
-	}
+// New validates the environment (resolves the claude CLI) and returns a
+// Server ready to Run. It does not start the HTTP listener.
+func New(cfg Config) (*Server, error) {
 	p, err := exec.LookPath("claude")
 	if err != nil {
-		return cfg, fmt.Errorf("claude CLI not found in PATH: %w", err)
+		return nil, fmt.Errorf("claude CLI not found in PATH: %w", err)
 	}
-	cfg.ClaudePath = p
-	return cfg, nil
+	return &Server{cfg: cfg, claudePath: p}, nil
 }
 
-func configPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "claudama", "conf.toml"), nil
+func (s *Server) addr() string {
+	return fmt.Sprintf("127.0.0.1:%d", s.cfg.Port)
 }
 
-func loadFileConfig() (fileConfig, error) {
-	fc := defaultFileConfig()
-	path, err := configPath()
-	if err != nil {
-		return fc, err
-	}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return fc, nil
-	}
-	if err != nil {
-		return fc, fmt.Errorf("read %s: %w", path, err)
-	}
-	if err := toml.Unmarshal(data, &fc); err != nil {
-		return fc, fmt.Errorf("parse %s: %w", path, err)
-	}
-	if fc.Port < 1 || fc.Port > 65535 {
-		return fc, fmt.Errorf("%s: invalid port %d (must be 1–65535)", path, fc.Port)
-	}
-	return fc, nil
-}
-
-func main() {
-	cfg, err := loadConfig()
-	if err != nil {
-		slog.Error("startup failed", "err", err)
-		os.Exit(1)
-	}
-
+// Run starts the HTTP server and blocks until SIGINT/SIGTERM or an
+// unrecoverable error. All user-visible output (slog logs, bind-error help
+// text) is handled here — the caller only needs to translate a non-nil
+// error into a non-zero exit code.
+func (s *Server) Run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/tags", handleTags)
 	mux.HandleFunc("POST /api/show", handleShow)
-	mux.HandleFunc("POST /api/chat", handleChat(cfg))
+	mux.HandleFunc("POST /api/chat", s.handleChat())
 
 	srv := &http.Server{
-		Handler:           logRequests(cfg, mux),
+		Handler:           s.logRequests(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	ln, err := net.Listen("tcp", cfg.Addr)
+	addr := s.addr()
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		reportBindError(cfg.Addr, err)
-		os.Exit(1)
+		s.reportBindError(addr, err)
+		return err
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -114,18 +65,19 @@ func main() {
 
 	errc := make(chan error, 1)
 	go func() {
-		slog.Info("claudama listening", "addr", cfg.Addr, "claude", cfg.ClaudePath)
+		slog.Info("claudama listening", "addr", addr, "claude", s.claudePath)
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errc <- err
 		}
 		close(errc)
 	}()
 
+	var runErr error
 	select {
 	case err, ok := <-errc:
 		if ok {
 			slog.Error("server failed", "err", err)
-			os.Exit(1)
+			runErr = err
 		}
 	case <-ctx.Done():
 		slog.Info("shutting down")
@@ -136,12 +88,13 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown error", "err", err)
 	}
+	return runErr
 }
 
-// reportBindError prints a human-readable message when claudama can't bind its
-// port. The common case on a fresh install is that Ollama itself is already
+// reportBindError prints a human-readable message when the listener can't
+// bind. The common case on a fresh install is that Ollama itself is already
 // listening on 11434 — probe and say so explicitly.
-func reportBindError(addr string, err error) {
+func (s *Server) reportBindError(addr string, err error) {
 	if !errors.Is(err, syscall.EADDRINUSE) {
 		fmt.Fprintf(os.Stderr, "claudama: failed to listen on %s: %v\n", addr, err)
 		return
@@ -150,7 +103,10 @@ func reportBindError(addr string, err error) {
 	if isOllama(addr) {
 		occupant = "Ollama"
 	}
-	cfgPath, _ := configPath()
+	cfgPath := s.cfg.ConfigFilePath
+	if cfgPath == "" {
+		cfgPath = "~/.config/claudama/conf.toml"
+	}
 	fmt.Fprintf(os.Stderr, `claudama: %s is already in use by %s.
 
 claudama defaults to Ollama's port (11434) so Ollama-compatible clients
@@ -188,10 +144,10 @@ func isOllama(addr string) bool {
 	return body.Version != ""
 }
 
-func logRequests(cfg config, next http.Handler) http.Handler {
+func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attrs := []any{"method", r.Method, "path", r.URL.Path}
-		if cfg.Debug && r.Body != nil && r.Method != http.MethodGet {
+		if s.cfg.Debug && r.Body != nil && r.Method != http.MethodGet {
 			body, _ := io.ReadAll(r.Body)
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			attrs = append(attrs, "body", string(body))

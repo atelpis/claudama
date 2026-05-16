@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"cmp"
@@ -118,7 +118,7 @@ func handleShow(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func handleChat(cfg config) http.HandlerFunc {
+func (s *Server) handleChat() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req chatRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -132,10 +132,10 @@ func handleChat(cfg config) http.HandlerFunc {
 
 		start := time.Now()
 		if stream {
-			writeStreamingChat(w, r, cfg, tag, m, req.Messages, start)
+			s.writeStreamingChat(w, r, tag, m, req.Messages, start)
 			return
 		}
-		writeBufferedChat(w, r, cfg, tag, m, req.Messages, start)
+		s.writeBufferedChat(w, r, tag, m, req.Messages, start)
 	}
 }
 
@@ -162,9 +162,9 @@ func logChat(req chatRequest, m modelEntry, stream bool) {
 	)
 }
 
-func writeBufferedChat(w http.ResponseWriter, r *http.Request, cfg config, tag string, m modelEntry, messages []ollamaMessage, start time.Time) {
+func (s *Server) writeBufferedChat(w http.ResponseWriter, r *http.Request, tag string, m modelEntry, messages []ollamaMessage, start time.Time) {
 	var sb strings.Builder
-	res, err := streamClaude(r.Context(), cfg, m.ClaudeArg, messages, func(delta string) error {
+	res, err := s.streamClaude(r.Context(), m.ClaudeArg, messages, func(delta string) error {
 		sb.WriteString(delta)
 		return nil
 	})
@@ -175,7 +175,7 @@ func writeBufferedChat(w http.ResponseWriter, r *http.Request, cfg config, tag s
 	writeJSON(w, terminalChunk(tag, sb.String(), "stop", start, res))
 }
 
-func writeStreamingChat(w http.ResponseWriter, r *http.Request, cfg config, tag string, m modelEntry, messages []ollamaMessage, start time.Time) {
+func (s *Server) writeStreamingChat(w http.ResponseWriter, r *http.Request, tag string, m modelEntry, messages []ollamaMessage, start time.Time) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -184,7 +184,7 @@ func writeStreamingChat(w http.ResponseWriter, r *http.Request, cfg config, tag 
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	enc := json.NewEncoder(w)
 
-	res, err := streamClaude(r.Context(), cfg, m.ClaudeArg, messages, func(delta string) error {
+	res, err := s.streamClaude(r.Context(), m.ClaudeArg, messages, func(delta string) error {
 		if err := enc.Encode(chatResponse{
 			Model:     tag,
 			CreatedAt: time.Now().UTC(),

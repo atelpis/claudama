@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bufio"
@@ -38,7 +38,7 @@ type claudeResult struct {
 
 // streamClaude shells out to the local `claude` CLI, streams text deltas to
 // onDelta, and returns final usage info from the result event.
-func streamClaude(ctx context.Context, cfg config, claudeModel string, messages []ollamaMessage, onDelta func(string) error) (claudeResult, error) {
+func (s *Server) streamClaude(ctx context.Context, claudeModel string, messages []ollamaMessage, onDelta func(string) error) (claudeResult, error) {
 	prompt, system := buildPrompt(messages)
 	if prompt == "" {
 		return claudeResult{}, fmt.Errorf("no user message in request")
@@ -55,15 +55,15 @@ func streamClaude(ctx context.Context, cfg config, claudeModel string, messages 
 	if system != "" {
 		args = append(args, "--append-system-prompt", system)
 	}
-	if model := cmp.Or(claudeModel, cfg.ClaudeModel); model != "" {
+	if model := cmp.Or(claudeModel, s.cfg.ClaudeModel); model != "" {
 		args = append(args, "--model", model)
 	}
 
-	cmd := exec.CommandContext(ctx, cfg.ClaudePath, args...)
+	cmd := exec.CommandContext(ctx, s.claudePath, args...)
 	// Drop the CLAUDECODE guard so the server can run from inside a Claude Code
 	// session during development.
 	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")
-	if cfg.Debug {
+	if s.cfg.Debug {
 		cmd.Stderr = os.Stderr
 	}
 
