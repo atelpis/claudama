@@ -1,14 +1,13 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 )
-
-const fakeModelDigest = "0000000000000000000000000000000000000000000000000000000000000000"
 
 type tagsResponse struct {
 	Models []tagModel `json:"models"`
@@ -47,55 +46,6 @@ type showResponse struct {
 	Capabilities []string       `json:"capabilities"`
 }
 
-func modelDetails(m modelEntry) tagModelInfo {
-	return tagModelInfo{
-		Format:            "gguf",
-		Family:            "llama",
-		Families:          []string{"llama"},
-		ParameterSize:     m.Param,
-		QuantizationLevel: "Q4_K_M",
-	}
-}
-
-func handleTags(w http.ResponseWriter, r *http.Request) {
-	resp := tagsResponse{Models: make([]tagModel, 0, len(models))}
-	now := time.Now().UTC()
-	for _, m := range models {
-		resp.Models = append(resp.Models, tagModel{
-			Name:       m.Tag,
-			Model:      m.Tag,
-			ModifiedAt: now,
-			Size:       4000000000,
-			Digest:     fakeModelDigest,
-			Details:    modelDetails(m),
-		})
-	}
-	writeJSON(w, resp)
-}
-
-func handleShow(w http.ResponseWriter, r *http.Request) {
-	var req showRequest
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	tag := req.Model
-	if tag == "" {
-		tag = req.Name
-	}
-	m := resolveModel(tag)
-
-	writeJSON(w, showResponse{
-		Modelfile:  "# claudama — forwards to local `claude` CLI (" + m.ClaudeArg + ")\n",
-		Parameters: "",
-		Template:   "{{ .Prompt }}",
-		Details:    modelDetails(m),
-		ModelInfo: map[string]any{
-			"general.architecture":    "llama",
-			"general.parameter_count": 8000000000,
-			"llama.context_length":    200000,
-		},
-		Capabilities: []string{"completion"},
-	})
-}
-
 type ollamaMessage struct {
 	Role    string   `json:"role"`
 	Content string   `json:"content"`
@@ -123,58 +73,109 @@ type chatResponse struct {
 	EvalDuration       int64 `json:"eval_duration,omitempty"`
 }
 
-func handleChat(w http.ResponseWriter, r *http.Request) {
-	var req chatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+func modelDetails(m modelEntry) tagModelInfo {
+	return tagModelInfo{
+		Format:            "gguf",
+		Family:            "llama",
+		Families:          []string{"llama"},
+		ParameterSize:     m.ParameterSize,
+		QuantizationLevel: "Q4_K_M",
 	}
-	m := resolveModel(req.Model)
-	model := req.Model
-	if model == "" {
-		model = m.Tag
-	}
-	stream := req.Stream == nil || *req.Stream
-	start := time.Now()
+}
 
-	var sysMsgs, userMsgs, asstMsgs, totalChars int
+func handleTags(w http.ResponseWriter, r *http.Request) {
+	resp := tagsResponse{Models: make([]tagModel, 0, len(models))}
+	now := time.Now().UTC()
+	for _, m := range models {
+		resp.Models = append(resp.Models, tagModel{
+			Name:       m.Tag,
+			Model:      m.Tag,
+			ModifiedAt: now,
+			Size:       4000000000,
+			Digest:     fakeModelDigest,
+			Details:    modelDetails(m),
+		})
+	}
+	writeJSON(w, resp)
+}
+
+func handleShow(w http.ResponseWriter, r *http.Request) {
+	var req showRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	m := resolveModel(cmp.Or(req.Model, req.Name))
+
+	writeJSON(w, showResponse{
+		Modelfile:  "# claudama — forwards to local `claude` CLI (" + m.ClaudeArg + ")\n",
+		Parameters: "",
+		Template:   "{{ .Prompt }}",
+		Details:    modelDetails(m),
+		ModelInfo: map[string]any{
+			"general.architecture":    "llama",
+			"general.parameter_count": 8000000000,
+			"llama.context_length":    200000,
+		},
+		Capabilities: []string{"completion"},
+	})
+}
+
+func handleChat(cfg config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req chatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		m := resolveModel(req.Model)
+		tag := cmp.Or(req.Model, m.Tag)
+		stream := req.Stream == nil || *req.Stream
+		logChat(req, m, stream)
+
+		start := time.Now()
+		if stream {
+			writeStreamingChat(w, r, cfg, tag, m, req.Messages, start)
+			return
+		}
+		writeBufferedChat(w, r, cfg, tag, m, req.Messages, start)
+	}
+}
+
+func logChat(req chatRequest, m modelEntry, stream bool) {
+	var sys, user, asst, totalChars int
 	for _, msg := range req.Messages {
 		totalChars += len(msg.Content)
 		switch msg.Role {
 		case "system":
-			sysMsgs++
+			sys++
 		case "user":
-			userMsgs++
+			user++
 		case "assistant":
-			asstMsgs++
+			asst++
 		}
 	}
-	log.Printf("chat: requested=%q claude=%q stream=%t messages=%d (sys=%d user=%d asst=%d) chars=%d",
-		req.Model, m.ClaudeArg, stream, len(req.Messages), sysMsgs, userMsgs, asstMsgs, totalChars)
+	slog.Info("chat",
+		"requested", req.Model,
+		"claude", m.ClaudeArg,
+		"stream", stream,
+		"messages", len(req.Messages),
+		"sys", sys, "user", user, "asst", asst,
+		"chars", totalChars,
+	)
+}
 
-	if !stream {
-		var sb strings.Builder
-		res, err := streamClaude(r.Context(), m.ClaudeArg, req.Messages, func(delta string) error {
-			sb.WriteString(delta)
-			return nil
-		})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		writeJSON(w, chatResponse{
-			Model:           model,
-			CreatedAt:       time.Now().UTC(),
-			Message:         ollamaMessage{Role: "assistant", Content: sb.String()},
-			Done:            true,
-			DoneReason:      "stop",
-			TotalDuration:   time.Since(start).Nanoseconds(),
-			PromptEvalCount: res.InputTokens,
-			EvalCount:       res.OutputTokens,
-		})
+func writeBufferedChat(w http.ResponseWriter, r *http.Request, cfg config, tag string, m modelEntry, messages []ollamaMessage, start time.Time) {
+	var sb strings.Builder
+	res, err := streamClaude(r.Context(), cfg, m.ClaudeArg, messages, func(delta string) error {
+		sb.WriteString(delta)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	writeJSON(w, terminalChunk(tag, sb.String(), "stop", start, res))
+}
 
+func writeStreamingChat(w http.ResponseWriter, r *http.Request, cfg config, tag string, m modelEntry, messages []ollamaMessage, start time.Time) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -183,9 +184,9 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	enc := json.NewEncoder(w)
 
-	res, err := streamClaude(r.Context(), m.ClaudeArg, req.Messages, func(delta string) error {
+	res, err := streamClaude(r.Context(), cfg, m.ClaudeArg, messages, func(delta string) error {
 		if err := enc.Encode(chatResponse{
-			Model:     model,
+			Model:     tag,
 			CreatedAt: time.Now().UTC(),
 			Message:   ollamaMessage{Role: "assistant", Content: delta},
 			Done:      false,
@@ -196,9 +197,9 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		// Best-effort: surface the error in a final chunk so Raycast doesn't hang.
+		// Best-effort: surface the error in a final chunk so the client doesn't hang.
 		_ = enc.Encode(chatResponse{
-			Model:      model,
+			Model:      tag,
 			CreatedAt:  time.Now().UTC(),
 			Message:    ollamaMessage{Role: "assistant", Content: "\n\n[claudama error: " + err.Error() + "]"},
 			Done:       true,
@@ -207,21 +208,26 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 		return
 	}
+	_ = enc.Encode(terminalChunk(tag, "", "stop", start, res))
+	flusher.Flush()
+}
 
-	_ = enc.Encode(chatResponse{
-		Model:           model,
+func terminalChunk(tag, content, reason string, start time.Time, res claudeResult) chatResponse {
+	return chatResponse{
+		Model:           tag,
 		CreatedAt:       time.Now().UTC(),
-		Message:         ollamaMessage{Role: "assistant", Content: ""},
+		Message:         ollamaMessage{Role: "assistant", Content: content},
 		Done:            true,
-		DoneReason:      "stop",
+		DoneReason:      reason,
 		TotalDuration:   time.Since(start).Nanoseconds(),
 		PromptEvalCount: res.InputTokens,
 		EvalCount:       res.OutputTokens,
-	})
-	flusher.Flush()
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("writeJSON encode", "err", err)
+	}
 }
