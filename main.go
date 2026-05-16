@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,8 +13,11 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/BurntSushi/toml"
 )
 
 type config struct {
@@ -25,9 +27,24 @@ type config struct {
 	ClaudeModel string // optional default fallback when no per-request model is set
 }
 
+// fileConfig is the on-disk schema at ~/.config/claudama/conf.toml.
+// Values in defaultFileConfig() are used as a baseline; the file overrides
+// only the fields it specifies. Missing file → all defaults.
+type fileConfig struct {
+	Port int `toml:"port"`
+}
+
+func defaultFileConfig() fileConfig {
+	return fileConfig{Port: 11434}
+}
+
 func loadConfig() (config, error) {
+	fc, err := loadFileConfig()
+	if err != nil {
+		return config{}, err
+	}
 	cfg := config{
-		Addr:        cmp.Or(os.Getenv("ADDR"), "127.0.0.1:11434"),
+		Addr:        fmt.Sprintf("127.0.0.1:%d", fc.Port),
 		Debug:       os.Getenv("CLAUDAMA_DEBUG") != "",
 		ClaudeModel: os.Getenv("CLAUDE_MODEL"),
 	}
@@ -37,6 +54,36 @@ func loadConfig() (config, error) {
 	}
 	cfg.ClaudePath = p
 	return cfg, nil
+}
+
+func configPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "claudama", "conf.toml"), nil
+}
+
+func loadFileConfig() (fileConfig, error) {
+	fc := defaultFileConfig()
+	path, err := configPath()
+	if err != nil {
+		return fc, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return fc, nil
+	}
+	if err != nil {
+		return fc, fmt.Errorf("read %s: %w", path, err)
+	}
+	if err := toml.Unmarshal(data, &fc); err != nil {
+		return fc, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if fc.Port < 1 || fc.Port > 65535 {
+		return fc, fmt.Errorf("%s: invalid port %d (must be 1–65535)", path, fc.Port)
+	}
+	return fc, nil
 }
 
 func main() {
@@ -103,7 +150,8 @@ func reportBindError(addr string, err error) {
 	if isOllama(addr) {
 		occupant = "Ollama"
 	}
-	fmt.Fprintf(os.Stderr, `claudama: port %s is already in use by %s.
+	cfgPath, _ := configPath()
+	fmt.Fprintf(os.Stderr, `claudama: %s is already in use by %s.
 
 claudama defaults to Ollama's port (11434) so Ollama-compatible clients
 (e.g. Raycast) find it without configuration. Pick one:
@@ -112,10 +160,11 @@ claudama defaults to Ollama's port (11434) so Ollama-compatible clients
       brew services stop ollama   # or: pkill ollama
       claudama
 
-  • Or run claudama on a different port:
-      ADDR=127.0.0.1:11436 claudama
-    (then point your client at http://127.0.0.1:11436)
-`, addr, occupant)
+  • Or run claudama on a different port by editing (or creating) %s
+    and setting:
+      port = 11436
+    Then point your client at http://127.0.0.1:11436
+`, addr, occupant, cfgPath)
 }
 
 // isOllama returns true when the process listening on addr looks like Ollama

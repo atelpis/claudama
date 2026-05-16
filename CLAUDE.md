@@ -10,7 +10,7 @@ claudama is an Ollama-API-compatible HTTP server that forwards chat requests to 
 
 - Build: `go build ./...`
 - Vet: `go vet ./...`
-- Run: `go run .` (listens on `127.0.0.1:11434` — Ollama's default port; override with `ADDR=host:port`, e.g. `ADDR=127.0.0.1:11436` when real Ollama is running)
+- Run: `go run .` (listens on `127.0.0.1:11434` — Ollama's default port). To change the port, edit (or create, if missing) `~/.config/claudama/conf.toml` and set `port = 11436`. The Homebrew formula seeds this file on install, so on a brew-installed system it always exists. There is no `ADDR` env var — config is file-only so Homebrew installs have one canonical place to edit. The file overrides only the fields it specifies; the in-code `defaultFileConfig()` supplies the rest.
 - Select default Claude model: `CLAUDE_MODEL=claude-opus-4-7 go run .`
 - Test: `go test ./...`
 - Smoke test the chat endpoint:
@@ -24,7 +24,7 @@ claudama is an Ollama-API-compatible HTTP server that forwards chat requests to 
 
 Three files, one `main` package:
 
-- `main.go` — HTTP bootstrap. Registers `GET /api/tags` (model list), `POST /api/show` (per-model details + capabilities — Raycast calls this after `/api/tags` and marks the model unavailable if it 404s), and `POST /api/chat`. Default listen address `127.0.0.1:11434` (same as Ollama so clients work without configuration). When the port is busy, `reportBindError` probes `/api/version` to detect whether Ollama itself is the occupant and prints a tailored message suggesting `brew services stop ollama` or `ADDR=127.0.0.1:11436`.
+- `main.go` — HTTP bootstrap and config. Registers `GET /api/tags` (model list), `POST /api/show` (per-model details + capabilities — Raycast calls this after `/api/tags` and marks the model unavailable if it 404s), and `POST /api/chat`. Port comes from `~/.config/claudama/conf.toml` (`port = N`), defaulting to `11434` when the file is absent. `defaultFileConfig()` is the single source of truth for defaults — `loadFileConfig` starts from that struct and lets `toml.Unmarshal` patch in whatever the user specified, so partial files are fine. Host is always `127.0.0.1`. When the port is busy, `reportBindError` probes `/api/version` to detect whether Ollama itself is the occupant and prints a tailored message pointing at the config file.
 - `ollama.go` — Ollama wire format. `handleChat` decodes the Ollama `chatRequest`, calls `streamClaude`, and emits responses. Two modes:
   - **Streaming (default):** NDJSON chunks, one per text delta, terminated by a `done:true` chunk with usage stats.
   - **Non-streaming (`"stream": false`):** buffers all deltas and returns a single JSON object.
