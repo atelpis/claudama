@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -92,56 +91,22 @@ func (s *Server) Run() error {
 }
 
 // reportBindError prints a human-readable message when the listener can't
-// bind. The common case on a fresh install is that Ollama itself is already
-// listening on 11434 — probe and say so explicitly.
+// bind. claudama defaults to 11434 (Ollama's port), so a collision is likely
+// — but we don't probe; we just point at the two ways out.
 func (s *Server) reportBindError(addr string, err error) {
 	if !errors.Is(err, syscall.EADDRINUSE) {
 		fmt.Fprintf(os.Stderr, "claudama: failed to listen on %s: %v\n", addr, err)
 		return
 	}
-	occupant := "another process"
-	if isOllama(addr) {
-		occupant = "Ollama"
-	}
 	cfgPath := s.cfg.ConfigFilePath
 	if cfgPath == "" {
 		cfgPath = "~/.config/claudama/conf.toml"
 	}
-	fmt.Fprintf(os.Stderr, `claudama: %s is already in use by %s.
+	fmt.Fprintf(os.Stderr, `claudama: %s is already in use (likely Ollama).
 
-claudama defaults to Ollama's port (11434) so Ollama-compatible clients
-(e.g. Raycast) find it without configuration. Pick one:
-
-  • Stop Ollama, then start claudama:
-      brew services stop ollama   # or: pkill ollama
-      claudama
-
-  • Or run claudama on a different port by editing (or creating) %s
-    and setting:
-      port = 11436
-    Then point your client at http://127.0.0.1:11436
-`, addr, occupant, cfgPath)
-}
-
-// isOllama returns true when the process listening on addr looks like Ollama
-// (its /api/version endpoint returns a JSON object with a "version" field).
-func isOllama(addr string) bool {
-	client := &http.Client{Timeout: 500 * time.Millisecond}
-	resp, err := client.Get("http://" + addr + "/api/version")
-	if err != nil || resp.StatusCode != http.StatusOK {
-		if resp != nil {
-			resp.Body.Close()
-		}
-		return false
-	}
-	defer resp.Body.Close()
-	var body struct {
-		Version string `json:"version"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return false
-	}
-	return body.Version != ""
+Either free the port, or change claudama's port in %s:
+  port = 11435
+`, addr, cfgPath)
 }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {
