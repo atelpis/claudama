@@ -10,22 +10,21 @@ claudama is an Ollama-API-compatible HTTP server that forwards chat requests to 
 
 - Build: `go build ./...`
 - Vet: `go vet ./...`
-- Run: `go run .` (listens on `127.0.0.1:11436`; override with `ADDR=host:port`)
-- Select Claude model: `CLAUDE_MODEL=claude-opus-4-7 go run .`
+- Run: `go run .` (listens on `127.0.0.1:11434` — Ollama's default port; override with `ADDR=host:port`, e.g. `ADDR=127.0.0.1:11436` when real Ollama is running)
+- Select default Claude model: `CLAUDE_MODEL=claude-opus-4-7 go run .`
+- Test: `go test ./...`
 - Smoke test the chat endpoint:
   ```
-  curl -sN -X POST http://127.0.0.1:11436/api/chat \
+  curl -sN -X POST http://127.0.0.1:11434/api/chat \
     -H 'Content-Type: application/json' \
-    -d '{"model":"claudama:latest","messages":[{"role":"user","content":"say pong"}]}'
+    -d '{"model":"claudama-sonnet:4.6","messages":[{"role":"user","content":"say pong"}]}'
   ```
-
-No test suite yet.
 
 ## Architecture
 
 Three files, one `main` package:
 
-- `main.go` — HTTP bootstrap. Registers `GET /api/tags` (model list), `POST /api/show` (per-model details + capabilities — Raycast calls this after `/api/tags` and marks the model unavailable if it 404s), and `POST /api/chat`. Default listen address `127.0.0.1:11436` (not Ollama's default 11434 — clients must be pointed explicitly).
+- `main.go` — HTTP bootstrap. Registers `GET /api/tags` (model list), `POST /api/show` (per-model details + capabilities — Raycast calls this after `/api/tags` and marks the model unavailable if it 404s), and `POST /api/chat`. Default listen address `127.0.0.1:11434` (same as Ollama so clients work without configuration). When the port is busy, `reportBindError` probes `/api/version` to detect whether Ollama itself is the occupant and prints a tailored message suggesting `brew services stop ollama` or `ADDR=127.0.0.1:11436`.
 - `ollama.go` — Ollama wire format. `handleChat` decodes the Ollama `chatRequest`, calls `streamClaude`, and emits responses. Two modes:
   - **Streaming (default):** NDJSON chunks, one per text delta, terminated by a `done:true` chunk with usage stats.
   - **Non-streaming (`"stream": false`):** buffers all deltas and returns a single JSON object.
@@ -48,5 +47,5 @@ Three files, one `main` package:
 ### Tooling disabled
 `--tools ""` is intentional — claudama is pure chat. Do not add Read/Bash/etc. without a clear reason; the upstream client (e.g. Raycast) expects a plain LLM.
 
-## Model name
-`/api/chat` accepts any `model` string from the client and echoes it back in responses. The Ollama-side identity is `claudama:latest` (constant `fakeModelName`). The actual Claude model is selected via the `CLAUDE_MODEL` env var passed to the `claude` CLI, independent of what the client sends.
+## Model registry
+`models.go` defines the tags exposed via `/api/tags`: `claudama-sonnet:4.6`, `claudama-opus:4.7`, `claudama-haiku:4.5`. `resolveModel` maps a client-supplied tag to its `claude --model` argument, falling back to the first entry on unknown/empty tags. `CLAUDE_MODEL` env var is a secondary fallback used only when the per-request tag does not match a registered entry.
