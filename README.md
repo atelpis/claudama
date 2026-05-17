@@ -13,8 +13,9 @@ claudama wraps the [`claude`](https://docs.claude.com/en/docs/claude-code) CLI i
    brew services start claudama   # one-time; auto-starts on login from here on
    ```
 
-   > [!NOTE]
-   > If you run Ollama on its default port (11434), claudama needs to move out of the way. Change its port in `/opt/homebrew/etc/claudama/conf.toml` (or `/usr/local/etc/...` on Intel):
+   > **Already running Ollama?**
+   >
+   > If Ollama is on its default port (11434), claudama needs to move out of the way. Change its port in `/opt/homebrew/etc/claudama/conf.toml` (or `/usr/local/etc/...` on Intel):
    >
    > ```toml
    > port = 11435
