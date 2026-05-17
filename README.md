@@ -1,4 +1,4 @@
-# claudama
+# Claudama
 
 Use your **Claude subscription** as a Raycast AI provider — instead of paying per-token.
 
@@ -13,17 +13,22 @@ claudama wraps the [`claude`](https://docs.claude.com/en/docs/claude-code) CLI i
    brew services start claudama   # one-time; auto-starts on login from here on
    ```
 
-2. **If you already run Ollama on the default port (11434),** change claudama's port in `/opt/homebrew/etc/claudama/conf.toml` (or `/usr/local/etc/...` on Intel):
+   > [!NOTE]
+   > If you run Ollama on its default port (11434), claudama needs to move out of the way. Change its port in `/opt/homebrew/etc/claudama/conf.toml` (or `/usr/local/etc/...` on Intel):
+   >
+   > ```toml
+   > port = 11435
+   > ```
+   >
+   > Then `brew services restart claudama`, and in *Raycast Settings → AI → Ollama* update the host to `http://127.0.0.1:11435`.
+   >
+   > ![Raycast Ollama settings](docs/images/ollama-settings.png)
 
-   ```toml
-   port = 11436
-   ```
+2. **Sync models in Raycast:** open *Raycast Settings → AI → Ollama* and click **Sync Models**. You should now see Claudama Haiku, Sonnet, and Opus in the list of models.
 
-   Then `brew services restart claudama`.
+3. **Wire up Raycast AI:** assign them to your Quick AI, Chat, and Commands as you like.
 
-3. **Point Raycast at it:** open *Raycast Settings → AI → Ollama*, set the host to `http://127.0.0.1:11434` (or whatever port you chose), and click **Sync Models**.
-
-4. **Wire up Raycast AI:** in the same settings panel, assign the synced `claudama-haiku:4.5`, `claudama-sonnet:4.6`, and `claudama-opus:4.7` models to your Quick AI, Chat, and Commands as you like.
+   ![Quick AI model picker showing Claudama-Haiku 4.5](docs/images/model-select.png)
 
 That's it — Raycast AI now runs on your Claude subscription.
 
