@@ -13,16 +13,20 @@ import (
 )
 
 // version is overridden at build time via -ldflags "-X main.version=v0.1.0".
-// Homebrew (and the Makefile) inject the real value; `go run` / `go install`
-// without ldflags leaves it as "dev".
+// Goreleaser injects the real value for release archives; `go run` / `go
+// install` without ldflags leaves it as "dev".
 var version = "dev"
 
-// etcConfigDir is overridden at build time via
-// -ldflags "-X main.etcConfigDir=/opt/homebrew/etc/claudama" so the Homebrew
-// formula can point the binary at its system-wide config seed. Empty when
-// unset → the etc fallback is simply skipped (source builds keep the
-// ~/.config-only behavior).
-var etcConfigDir = ""
+// wellKnownEtcConfigPaths is the list of system-wide config locations probed
+// when no user config exists at ~/.config/claudama/conf.toml. Order matches
+// the conventional brew prefixes (Apple Silicon first, then Intel/Linux);
+// first hit wins. Probing at runtime — rather than baking the path in at
+// build time — lets the same goreleaser-built binary work under either brew
+// prefix or a non-brew install.
+var wellKnownEtcConfigPaths = []string{
+	"/opt/homebrew/etc/claudama/conf.toml",
+	"/usr/local/etc/claudama/conf.toml",
+}
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -49,9 +53,10 @@ func main() {
 
 // loadConfig builds a server.Config by overlaying a TOML config file (when
 // present) on top of server.DefaultConfig(), then layering env-driven fields
-// on top. Lookup order: ~/.config/claudama/conf.toml first; if missing and the
-// binary was built with an etcConfigDir (Homebrew), that directory's conf.toml
-// is the fallback.
+// on top. Lookup order: ~/.config/claudama/conf.toml first; if missing, the
+// well-known system paths (see wellKnownEtcConfigPaths) are consulted in
+// order. When nothing exists, the user-scoped path is returned so error
+// messages and /api/show point at the canonical override location.
 func loadConfig() (server.Config, error) {
 	cfg := server.DefaultConfig()
 
@@ -85,8 +90,7 @@ func loadConfig() (server.Config, error) {
 // resolveConfigPath returns the first existing config file path, falling back
 // to the user-scoped path when nothing exists (so callers always have a stable
 // path to surface in errors / `/api/show`). The user path always wins when
-// present; the etc path is only consulted on Homebrew-built binaries where
-// etcConfigDir was injected at link time.
+// present; otherwise wellKnownEtcConfigPaths are probed in order.
 func resolveConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -97,10 +101,9 @@ func resolveConfigPath() (string, error) {
 	if _, err := os.Stat(userPath); err == nil {
 		return userPath, nil
 	}
-	if etcConfigDir != "" {
-		etcPath := filepath.Join(etcConfigDir, "conf.toml")
-		if _, err := os.Stat(etcPath); err == nil {
-			return etcPath, nil
+	for _, p := range wellKnownEtcConfigPaths {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
 		}
 	}
 	return userPath, nil
