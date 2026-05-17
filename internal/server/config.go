@@ -8,7 +8,12 @@ package server
 // Fields tagged `toml:"-"` are populated by the caller from other sources
 // (env vars, derived paths) and ignored if present in the file.
 type Config struct {
-	Port           int    `toml:"port"`
+	Port int `toml:"port"`
+	// ClaudePath is an absolute path to the `claude` binary. When empty,
+	// the server resolves `claude` via $PATH. Setting this is the supported
+	// way to point claudama at the right binary under `brew services`,
+	// where launchd does not inherit a useful PATH.
+	ClaudePath     string `toml:"claude_path"`
 	Debug          bool   `toml:"-"`
 	ClaudeModel    string `toml:"-"`
 	ConfigFilePath string `toml:"-"` // canonical path of the config file; used only in error messages

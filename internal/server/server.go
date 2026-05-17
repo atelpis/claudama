@@ -26,11 +26,30 @@ type Server struct {
 // New validates the environment (resolves the claude CLI) and returns a
 // Server ready to Run. It does not start the HTTP listener.
 func New(cfg Config) (*Server, error) {
-	p, err := exec.LookPath("claude")
+	p, err := resolveClaude(cfg.ClaudePath)
 	if err != nil {
-		return nil, fmt.Errorf("claude CLI not found in PATH: %w", err)
+		return nil, err
 	}
 	return &Server{cfg: cfg, claudePath: p}, nil
+}
+
+// resolveClaude returns an absolute path to the `claude` binary. If the user
+// supplied claude_path in conf.toml, that wins (after a stat check so we fail
+// fast with a clear message). Otherwise we fall back to $PATH — fine for
+// interactive use, but unreliable under launchd / brew services, which is
+// exactly when claude_path is meant to be set.
+func resolveClaude(configured string) (string, error) {
+	if configured != "" {
+		if _, err := os.Stat(configured); err != nil {
+			return "", fmt.Errorf("claude_path %q: %w", configured, err)
+		}
+		return configured, nil
+	}
+	p, err := exec.LookPath("claude")
+	if err != nil {
+		return "", fmt.Errorf("claude CLI not found in PATH: %w (set claude_path in conf.toml to override)", err)
+	}
+	return p, nil
 }
 
 func (s *Server) addr() string {
