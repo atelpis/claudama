@@ -10,7 +10,8 @@ claudama is an Ollama-API-compatible HTTP server that forwards chat requests to 
 
 - Build: `go build ./...`
 - Vet: `go vet ./...`
-- Run: `go run ./cmd/claudama` (listens on `127.0.0.1:11434` — Ollama's default port). To change the port, edit (or create, if missing) `~/.config/claudama/conf.toml` and set `port = 11436`. The Homebrew formula seeds this file on install, so on a brew-installed system it always exists. There is no `ADDR` env var — config is file-only so Homebrew installs have one canonical place to edit. The file overrides only the fields it specifies; the in-code `defaultFileConfig()` supplies the rest.
+- Run: `go run ./cmd/claudama` (listens on `127.0.0.1:11434` — Ollama's default port). To change the port, edit (or create, if missing) `~/.config/claudama/conf.toml` and set `port = 11436`. Lookup order: `~/.config/claudama/conf.toml` first; if missing and the binary was built with `-ldflags "-X main.etcConfigDir=…"` (Homebrew does this), `${etcConfigDir}/conf.toml` is consulted as a fallback. The Homebrew formula seeds its etc copy on install so brew users get a working file out of the box without anything in $HOME. There is no `ADDR` env var — config is file-only so installs have one canonical place to edit. The file overrides only the fields it specifies; `server.DefaultConfig()` supplies the rest.
+- Version: `claudama -version` prints the build version. `var version` in `main.go` defaults to `"dev"` and is overridden by `-ldflags "-X main.version=v0.1.0"` at release/brew build time.
 - Install locally: `go install ./cmd/claudama` (produces `$(go env GOBIN)/claudama` — same binary Homebrew will ship).
 - Select default Claude model: `CLAUDE_MODEL=claude-opus-4-7 go run ./cmd/claudama`
 - Test: `go test ./...`
