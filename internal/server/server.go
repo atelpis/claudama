@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -57,14 +58,16 @@ func resolveClaude(configured string) (string, error) {
 
 // wellKnownClaudePaths is the list of locations resolveClaude probes when $PATH
 // lookup fails. Entries beginning with "~/" are expanded against the current
-// user's home directory at lookup time.
+// user's home directory at lookup time. The same directories also seed the
+// PATH passed to spawned `claude` processes (see augmentPath) so the node
+// shebang inside the npm-installed claude shim can find `node`.
 var wellKnownClaudePaths = []string{
-	"/opt/homebrew/bin/claude",   // Apple Silicon Homebrew, Anthropic .pkg
-	"/usr/local/bin/claude",      // Intel Homebrew, default npm prefix
-	"~/.local/bin/claude",        // pipx / user-prefix npm
-	"~/.npm-global/bin/claude",   // common custom npm prefix
-	"~/.bun/bin/claude",          // bun global install
-	"/usr/bin/claude",            // distro package managers (linux)
+	"/opt/homebrew/bin/claude", // Apple Silicon Homebrew, Anthropic .pkg
+	"/usr/local/bin/claude",    // Intel Homebrew, default npm prefix
+	"~/.local/bin/claude",      // pipx / user-prefix npm
+	"~/.npm-global/bin/claude", // common custom npm prefix
+	"~/.bun/bin/claude",        // bun global install
+	"/usr/bin/claude",          // distro package managers (linux)
 }
 
 func findClaudeInWellKnownPaths() (string, bool) {
@@ -78,6 +81,32 @@ func findClaudeInWellKnownPaths() (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// augmentPath returns env with PATH extended to include the directory of the
+// resolved claude binary plus every wellKnownClaudePaths parent directory.
+// This matters under `brew services` (and any other launchd-spawned scenario)
+// where the inherited PATH is stripped to /usr/bin:/bin:/usr/sbin:/sbin —
+// claude's `#!/usr/bin/env node` shebang would otherwise fail with exit 127
+// even though claudama itself resolved claude correctly.
+func augmentPath(env []string, claudePath string) []string {
+	home, _ := os.UserHomeDir()
+	extras := []string{filepath.Dir(claudePath)}
+	for _, p := range wellKnownClaudePaths {
+		if home != "" && len(p) >= 2 && p[:2] == "~/" {
+			p = filepath.Join(home, p[2:])
+		}
+		extras = append(extras, filepath.Dir(p))
+	}
+
+	for i, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		if k == "PATH" {
+			env[i] = "PATH=" + v + ":" + strings.Join(extras, ":")
+			return env
+		}
+	}
+	return append(env, "PATH="+strings.Join(extras, ":"))
 }
 
 func (s *Server) addr() string {

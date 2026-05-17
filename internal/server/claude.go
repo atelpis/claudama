@@ -61,8 +61,10 @@ func (s *Server) streamClaude(ctx context.Context, claudeModel string, messages 
 
 	cmd := exec.CommandContext(ctx, s.claudePath, args...)
 	// Drop the CLAUDECODE guard so the server can run from inside a Claude Code
-	// session during development.
-	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")
+	// session during development. Augment PATH so claude's npm shim can find
+	// `node` under launchd (`brew services`), where inherited PATH is minimal.
+	env := filterEnv(os.Environ(), "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")
+	cmd.Env = augmentPath(env, s.claudePath)
 	if s.cfg.Debug {
 		cmd.Stderr = os.Stderr
 	}
