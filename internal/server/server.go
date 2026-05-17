@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -33,11 +34,11 @@ func New(cfg Config) (*Server, error) {
 	return &Server{cfg: cfg, claudePath: p}, nil
 }
 
-// resolveClaude returns an absolute path to the `claude` binary. If the user
-// supplied claude_path in conf.toml, that wins (after a stat check so we fail
-// fast with a clear message). Otherwise we fall back to $PATH — fine for
-// interactive use, but unreliable under launchd / brew services, which is
-// exactly when claude_path is meant to be set.
+// resolveClaude returns an absolute path to the `claude` binary. Resolution
+// order: explicit claude_path → $PATH → well-known install locations. The
+// fallback list exists because launchd (and therefore `brew services`) gives
+// child processes a minimal PATH that excludes /opt/homebrew/bin etc., so
+// LookPath fails even when claude is installed in an obvious place.
 func resolveClaude(configured string) (string, error) {
 	if configured != "" {
 		if _, err := os.Stat(configured); err != nil {
@@ -45,11 +46,38 @@ func resolveClaude(configured string) (string, error) {
 		}
 		return configured, nil
 	}
-	p, err := exec.LookPath("claude")
-	if err != nil {
-		return "", fmt.Errorf("claude CLI not found in PATH: %w (set claude_path in conf.toml to override)", err)
+	if p, err := exec.LookPath("claude"); err == nil {
+		return p, nil
 	}
-	return p, nil
+	if p, ok := findClaudeInWellKnownPaths(); ok {
+		return p, nil
+	}
+	return "", fmt.Errorf("claude CLI not found in PATH or any well-known location (set claude_path in conf.toml to override)")
+}
+
+// wellKnownClaudePaths is the list of locations resolveClaude probes when $PATH
+// lookup fails. Entries beginning with "~/" are expanded against the current
+// user's home directory at lookup time.
+var wellKnownClaudePaths = []string{
+	"/opt/homebrew/bin/claude",   // Apple Silicon Homebrew, Anthropic .pkg
+	"/usr/local/bin/claude",      // Intel Homebrew, default npm prefix
+	"~/.local/bin/claude",        // pipx / user-prefix npm
+	"~/.npm-global/bin/claude",   // common custom npm prefix
+	"~/.bun/bin/claude",          // bun global install
+	"/usr/bin/claude",            // distro package managers (linux)
+}
+
+func findClaudeInWellKnownPaths() (string, bool) {
+	home, _ := os.UserHomeDir()
+	for _, p := range wellKnownClaudePaths {
+		if home != "" && len(p) >= 2 && p[:2] == "~/" {
+			p = filepath.Join(home, p[2:])
+		}
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return p, true
+		}
+	}
+	return "", false
 }
 
 func (s *Server) addr() string {
