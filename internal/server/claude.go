@@ -60,6 +60,11 @@ func (s *Server) streamClaude(ctx context.Context, claudeModel string, messages 
 	}
 
 	cmd := exec.CommandContext(ctx, s.claudePath, args...)
+	// Pin CWD to a TCC-neutral path. Claude scans the working directory at
+	// startup for CLAUDE.md / git context; if claudama was launched from a
+	// location under ~ that traversal hits ~/Music, ~/Pictures, etc. and macOS
+	// prompts for photo/music access against the parent (claudama).
+	cmd.Dir = os.TempDir()
 	// Drop the CLAUDECODE guard so the server can run from inside a Claude Code
 	// session during development. Augment PATH so claude's npm shim can find
 	// `node` under launchd (`brew services`), where inherited PATH is minimal.
