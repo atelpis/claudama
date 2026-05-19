@@ -13,19 +13,9 @@ claudama wraps the [`claude`](https://docs.claude.com/en/docs/claude-code) CLI i
    brew services start claudama   # one-time; auto-starts on login from here on
    ```
 
-   > **Already running Ollama?**
-   >
-   > If Ollama is on its default port (11434), claudama needs to move out of the way. Change its port in `/opt/homebrew/etc/claudama/conf.toml` (or `/usr/local/etc/...` on Intel):
-   >
-   > ```toml
-   > port = 11435
-   > ```
-   >
-   > Then `brew services restart claudama`, and in *Raycast Settings → AI → Ollama* update the host to `http://127.0.0.1:11435`.
-   >
-   > ![Raycast Ollama settings](docs/images/ollama-settings.png)
+2. **Point Raycast at claudama:** in *Raycast Settings → AI → Ollama* set the host to `http://127.0.0.1:11435`, then click **Sync Models**. You should now see Claudama Haiku, Sonnet, and Opus in the list of models.
 
-2. **Sync models in Raycast:** open *Raycast Settings → AI → Ollama* and click **Sync Models**. You should now see Claudama Haiku, Sonnet, and Opus in the list of models.
+   ![Raycast Ollama settings](docs/images/ollama-settings.png)
 
 3. **Wire up Raycast AI:** assign them to your Quick AI, Chat, and Commands as you like.
 
@@ -58,10 +48,15 @@ Full default config:
 
 ```toml
 # Port claudama listens on (127.0.0.1 only).
-port = 11434
+port = 11435
 
 # Absolute path to the `claude` binary. Leave empty to resolve via $PATH.
 # Set this when running under `brew services`, where launchd does not inherit
 # a useful PATH.
 claude_path = ""
 ```
+
+## Notes
+
+- Raycast only exposes its Ollama integration when the Ollama app is installed. You don't have to run it — the app just has to be present for Raycast to surface the provider slot.
+- Raycast's Ollama slot points at a single host. claudama defaults to port `11435` so it coexists with Ollama on `11434`; switch the host in Raycast settings to flip between them.

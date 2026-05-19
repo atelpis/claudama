@@ -22,5 +22,5 @@ type Config struct {
 // DefaultConfig returns the baseline Config. Callers should start from this
 // and overlay any user-provided overrides.
 func DefaultConfig() Config {
-	return Config{Port: 11434}
+	return Config{Port: 11435}
 }

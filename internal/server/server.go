@@ -167,8 +167,8 @@ func (s *Server) Run() error {
 }
 
 // reportBindError prints a human-readable message when the listener can't
-// bind. claudama defaults to 11434 (Ollama's port), so a collision is likely
-// — but we don't probe; we just point at the two ways out.
+// bind. claudama defaults to 11435 (one off Ollama's 11434) so the two can
+// coexist, but the user may have something else on 11435.
 func (s *Server) reportBindError(addr string, err error) {
 	if !errors.Is(err, syscall.EADDRINUSE) {
 		fmt.Fprintf(os.Stderr, "claudama: failed to listen on %s: %v\n", addr, err)
@@ -178,10 +178,10 @@ func (s *Server) reportBindError(addr string, err error) {
 	if cfgPath == "" {
 		cfgPath = "~/.config/claudama/conf.toml"
 	}
-	fmt.Fprintf(os.Stderr, `claudama: %s is already in use (likely Ollama).
+	fmt.Fprintf(os.Stderr, `claudama: %s is already in use.
 
 Either free the port, or change claudama's port in %s:
-  port = 11435
+  port = 11436
 `, addr, cfgPath)
 }
 
